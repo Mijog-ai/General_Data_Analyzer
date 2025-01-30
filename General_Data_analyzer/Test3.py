@@ -1,36 +1,63 @@
 import sys
 import os
-import time
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from huggingface_hub import login
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPushButton, QComboBox, QFileDialog, QLabel,
-                             QGroupBox, QGridLayout, QCheckBox, QMessageBox, QTextEdit,
-                             QListWidget, QAbstractItemView, QSpinBox, QDoubleSpinBox, QTableWidgetItem, QTableWidget,
-                             QLineEdit, QTabWidget)
+from PyQt5.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QComboBox,
+    QFileDialog,
+    QLabel,
+    QGroupBox,
+    QGridLayout,
+    QCheckBox,
+    QMessageBox,
+    QTextEdit,
+    QListWidget,
+    QAbstractItemView,
+    QSpinBox,
+    QDoubleSpinBox,
+    QTableWidgetItem,
+    QTableWidget,
+    QLineEdit,
+    QTabWidget,
+)
 from PyQt5.QtCore import Qt
 from scipy.ndimage import gaussian_filter1d
-from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
-from PyQt5.QtWidgets import QComboBox, QTextEdit, QPushButton, QLabel
 
+from PyQt5.QtWidgets import QComboBox, QTextEdit, QPushButton, QLabel
+from huggingface_hub import hf_hub_download
+from models.utils.model_LSTM import LSTMPumpModel
+
+from models.utils.data_utils import load_scaler
+import torch
 
 
 class DataAnalyzer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Data Analyzer")
-        self.setGeometry(100, 100, 1200,1000)
+        self.setGeometry(100, 100, 1200, 1000)
 
         # Initialize variables
         self.df = None
         self.filename = None
         self.last_modified_time = None
-        self.colors = ['b', 'r', 'g', 'c', 'm', 'y', 'k']
+        self.colors = ["b", "r", "g", "c", "m", "y", "k"]
         self.cursor_x = None  # Stores X position of cursor
+
+        self.df = None  # Loaded data from Tab1
+        self.model = None  # Loaded LSTM model
+        self.scaler = None  # Scaler for preprocessing
 
         self.setup_ui()
 
@@ -56,24 +83,29 @@ class DataAnalyzer(QMainWindow):
         self.description_label = QLabel("Pump Model Selection & Anomaly Detection")
         layout.addWidget(self.description_label)
 
-        # Dropdown menu for pump models
         self.pump_dropdown = QComboBox()
-        self.pump_dropdown.addItem("Fetching pump models...")  # Placeholder
+        self.pump_dropdown.addItem("Fetching pump models...")
         layout.addWidget(self.pump_dropdown)
 
-        # Button to analyze selected pump model
         self.analyze_button = QPushButton("Analyze Pump Data")
         self.analyze_button.clicked.connect(self.analyze_pump_model)
         layout.addWidget(self.analyze_button)
 
-        # Output area for anomaly results
         self.anomaly_results = QTextEdit()
         self.anomaly_results.setReadOnly(True)
         self.anomaly_results.setPlaceholderText("Anomaly detection results will appear here...")
         layout.addWidget(self.anomaly_results)
 
-        # Fetch pump models in the background
+        # Graph Display
+        # Graph Display
+        self.figure, self.axs = plt.subplots(3, 1, figsize=(10, 12))  # Three subplots
+        self.canvas = FigureCanvas(self.figure)
+        layout.addWidget(NavigationToolbar(self.canvas, self))
+        layout.addWidget(self.canvas)
+
         self.fetch_pump_models()
+
+
 
     def setup_tab1(self):
         layout = QVBoxLayout(self.tab1)
@@ -86,8 +118,6 @@ class DataAnalyzer(QMainWindow):
         # File selection
         file_group = QGroupBox("File Selection")
         file_layout = QVBoxLayout()
-
-
 
         self.btn_file = QPushButton("Select File")
         self.btn_file.clicked.connect(self.load_file)
@@ -119,8 +149,6 @@ class DataAnalyzer(QMainWindow):
         self.y_list = QListWidget()
         self.y_list.setSelectionMode(QAbstractItemView.MultiSelection)
         plot_layout.addWidget(self.y_list, 1, 1)
-
-
 
         # Add Export Button
         self.export_btn = QPushButton("Export Data and Plot")
@@ -185,7 +213,9 @@ class DataAnalyzer(QMainWindow):
         # Add Reset Button
         self.reset_btn = QPushButton("Reset Ranges")
         self.reset_btn.clicked.connect(self.reset_ranges)
-        plot_layout.addWidget(self.reset_btn, 6, 0, 1, 2)  # Move Reset button to its own row
+        plot_layout.addWidget(
+            self.reset_btn, 6, 0, 1, 2
+        )  # Move Reset button to its own row
 
         # Add grid and legend options
         options_layout = QHBoxLayout()
@@ -205,7 +235,9 @@ class DataAnalyzer(QMainWindow):
         # Smoothing options
         plot_layout.addWidget(QLabel("Smoothing Filter:"), 7, 0)
         self.smoothing_combo = QComboBox()
-        self.smoothing_combo.addItems(["None", "Gaussian"])  # Add more filters if needed
+        self.smoothing_combo.addItems(
+            ["None", "Gaussian"]
+        )  # Add more filters if needed
         plot_layout.addWidget(self.smoothing_combo, 7, 1)
 
         # Gaussian smoothing options
@@ -248,12 +280,20 @@ class DataAnalyzer(QMainWindow):
         right_layout.addWidget(self.toolbar)
 
         # Initialize vertical cursor (Hidden initially)
-        self.cursor_line = self.ax.axvline(x=0, color='r', linestyle='--', linewidth=1.5)
+        self.cursor_line = self.ax.axvline(
+            x=0, color="r", linestyle="--", linewidth=1.5
+        )
         self.cursor_line.set_visible(False)  # Hide initially
 
         # Initialize text for cursor (Hidden initially)
-        self.cursor_text = self.ax.text(0, 0, "", fontsize=10, color="black",
-                                        bbox=dict(facecolor="white", alpha=0.7))
+        self.cursor_text = self.ax.text(
+            0,
+            0,
+            "",
+            fontsize=10,
+            color="black",
+            bbox=dict(facecolor="white", alpha=0.7),
+        )
         self.cursor_text.set_visible(False)
 
         self.canvas.mpl_connect("button_press_event", self.on_click)
@@ -270,12 +310,15 @@ class DataAnalyzer(QMainWindow):
 
     def load_file(self):
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Select File", "", "CSV Files (*.csv);;Text Files (*.txt);;All Files (*.*)"
+            self,
+            "Select File",
+            "",
+            "CSV Files (*.csv);;Text Files (*.txt);;All Files (*.*)",
         )
         if filename:
             try:
                 # Read the file using semicolon as the delimiter
-                self.df = pd.read_csv(filename, delimiter=';', decimal=',')
+                self.df = pd.read_csv(filename, delimiter=";", decimal=",")
                 self.filename = filename
                 self.preprocess_headers()
                 self.update_ui()
@@ -289,13 +332,10 @@ class DataAnalyzer(QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to load file: {e}")
 
-
     def preprocess_headers(self):
         if self.df is not None:
             # Simplify column names if they include descriptions
-            self.df.columns = [col.split(';')[0].strip() for col in self.df.columns]
-
-
+            self.df.columns = [col.split(";")[0].strip() for col in self.df.columns]
 
     def reset_ranges(self):
         if self.df is not None:
@@ -312,7 +352,9 @@ class DataAnalyzer(QMainWindow):
                 self.y_min.setValue(y_min_global)
                 self.y_max.setValue(y_max_global)
 
-            QMessageBox.information(self, "Ranges Reset", "Ranges have been reset to the default values.")
+            QMessageBox.information(
+                self, "Ranges Reset", "Ranges have been reset to the default values."
+            )
         else:
             QMessageBox.warning(self, "No Data", "Please load a file first.")
 
@@ -338,7 +380,9 @@ class DataAnalyzer(QMainWindow):
         custom_base_name = os.path.splitext(os.path.basename(file_path))[0]
 
         # Prepare file names
-        csv_filename = os.path.join(save_directory, f"{custom_base_name}_Analyzed_data.csv")
+        csv_filename = os.path.join(
+            save_directory, f"{custom_base_name}_Analyzed_data.csv"
+        )
         plot_filename = os.path.join(save_directory, f"{custom_base_name}_Plot.png")
 
         # Ensure X and Y axes are selected
@@ -346,12 +390,16 @@ class DataAnalyzer(QMainWindow):
         y_cols = [item.text() for item in self.y_list.selectedItems()]
 
         if not x_col or not y_cols:
-            QMessageBox.warning(self, "Error", "Please select X and Y axes before exporting.")
+            QMessageBox.warning(
+                self, "Error", "Please select X and Y axes before exporting."
+            )
             return
 
         # Filter the data within the specified range
         x_min, x_max = self.x_min.value(), self.x_max.value()
-        filtered_df = self.df[(self.df[x_col] >= x_min) & (self.df[x_col] <= x_max)].copy()
+        filtered_df = self.df[
+            (self.df[x_col] >= x_min) & (self.df[x_col] <= x_max)
+        ].copy()
 
         # Create a new DataFrame for exporting
         export_df = filtered_df[[x_col]].copy()
@@ -362,26 +410,36 @@ class DataAnalyzer(QMainWindow):
             # Apply smoothing if enabled
             if self.smoothing_combo.currentText() == "Gaussian":
                 smoothed_data = self.apply_smoothing(filtered_df[y_col])
-                export_df[f"{y_col}_smoothed"] = smoothed_data  # Store smoothed values in a new column
+                export_df[f"{y_col}_smoothed"] = (
+                    smoothed_data  # Store smoothed values in a new column
+                )
 
         try:
             # Save the filtered data with proper formatting (semicolon separator for European CSV)
             export_df.to_csv(csv_filename, index=False, sep=";", decimal=",")
 
-            QMessageBox.information(self, "Success", f"Filtered data saved to:\n{csv_filename}")
+            QMessageBox.information(
+                self, "Success", f"Filtered data saved to:\n{csv_filename}"
+            )
 
             # Save the plot as an image
             self.figure.savefig(plot_filename)
             QMessageBox.information(self, "Success", f"Plot saved to:\n{plot_filename}")
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"An error occurred while exporting: {e}")
+            QMessageBox.warning(
+                self, "Error", f"An error occurred while exporting: {e}"
+            )
 
     def update_statistics(self, filtered_df):
         if filtered_df is not None and not filtered_df.empty:
             # Create a QTableWidget for statistics
             self.stats_table.setRowCount(0)  # Clear the table
-            self.stats_table.setColumnCount(4)  # Columns: Metric, X-Axis, Y-Axis Name, Value
-            self.stats_table.setHorizontalHeaderLabels(["Metric", "X-Axis", "Y-Axis", "Value"])
+            self.stats_table.setColumnCount(
+                4
+            )  # Columns: Metric, X-Axis, Y-Axis Name, Value
+            self.stats_table.setHorizontalHeaderLabels(
+                ["Metric", "X-Axis", "Y-Axis", "Value"]
+            )
 
             x_col = self.x_combo.currentText()
             y_cols = [item.text() for item in self.y_list.selectedItems()]
@@ -390,14 +448,16 @@ class DataAnalyzer(QMainWindow):
             x_stats = {
                 "Mean": filtered_df[x_col].mean(),
                 "Min": filtered_df[x_col].min(),
-                "Max": filtered_df[x_col].max()
+                "Max": filtered_df[x_col].max(),
             }
             for metric, value in x_stats.items():
                 row = self.stats_table.rowCount()
                 self.stats_table.insertRow(row)
                 self.stats_table.setItem(row, 0, QTableWidgetItem(metric))
                 self.stats_table.setItem(row, 1, QTableWidgetItem(x_col))
-                self.stats_table.setItem(row, 2, QTableWidgetItem("-"))  # No specific Y-axis
+                self.stats_table.setItem(
+                    row, 2, QTableWidgetItem("-")
+                )  # No specific Y-axis
                 self.stats_table.setItem(row, 3, QTableWidgetItem(f"{value:.2f}"))
 
             # Y-axis statistics
@@ -405,19 +465,20 @@ class DataAnalyzer(QMainWindow):
                 y_stats = {
                     "Mean": filtered_df[y_col].mean(),
                     "Min": filtered_df[y_col].min(),
-                    "Max": filtered_df[y_col].max()
+                    "Max": filtered_df[y_col].max(),
                 }
                 for metric, value in y_stats.items():
                     row = self.stats_table.rowCount()
                     self.stats_table.insertRow(row)
                     self.stats_table.setItem(row, 0, QTableWidgetItem(metric))
-                    self.stats_table.setItem(row, 1, QTableWidgetItem("-"))  # No specific X-axis
+                    self.stats_table.setItem(
+                        row, 1, QTableWidgetItem("-")
+                    )  # No specific X-axis
                     self.stats_table.setItem(row, 2, QTableWidgetItem(y_col))
                     self.stats_table.setItem(row, 3, QTableWidgetItem(f"{value:.2f}"))
         else:
             self.stats_table.setRowCount(0)  # Clear the table
             QMessageBox.warning(self, "No Data", "No data available for statistics.")
-
 
     def update_ui(self):
         if self.df is not None:
@@ -450,7 +511,7 @@ class DataAnalyzer(QMainWindow):
                 return
 
             # Ensure X-axis column is numeric
-            self.df[x_col] = pd.to_numeric(self.df[x_col], errors='coerce')
+            self.df[x_col] = pd.to_numeric(self.df[x_col], errors="coerce")
 
             # Filter data within specified X-axis range
             x_min, x_max = self.x_min.value(), self.x_max.value()
@@ -466,34 +527,34 @@ class DataAnalyzer(QMainWindow):
 
                 if self.smoothing_combo.currentText() == "None":
                     # Ensure Y-axis column is numeric
-                    self.df[y_col] = pd.to_numeric(self.df[y_col], errors='coerce')
+                    self.df[y_col] = pd.to_numeric(self.df[y_col], errors="coerce")
 
                     # Plot original data
                     self.ax.plot(
                         filtered_df[x_col],
                         filtered_df[y_col],
                         label=f"{y_col}",
-                        alpha=1
+                        alpha=1,
                     )
 
                 # Apply smoothing if smoothing is enabled
                 if self.smoothing_combo.currentText() != "None":
                     # Ensure Y-axis column is numeric
-                    self.df[y_col] = pd.to_numeric(self.df[y_col], errors='coerce')
+                    self.df[y_col] = pd.to_numeric(self.df[y_col], errors="coerce")
 
                     # Plot original data
                     self.ax.plot(
                         filtered_df[x_col],
                         filtered_df[y_col],
                         label=f"{y_col} (Original)",
-                        alpha=0.4
+                        alpha=0.4,
                     )
                     smoothed_data = self.apply_smoothing(filtered_df[y_col])
                     self.ax.plot(
                         filtered_df[x_col],
                         smoothed_data,
                         label=f"{y_col} (Smoothed)",
-                        alpha=1.0
+                        alpha=1.0,
                     )
 
             # Set plot options
@@ -543,7 +604,9 @@ class DataAnalyzer(QMainWindow):
         nearest_x = x_data[nearest_index]
 
         # Draw a new vertical cursor line at the nearest X value
-        cursor_line = self.ax.axvline(x=nearest_x, color='r', linestyle='--', linewidth=1.5)
+        cursor_line = self.ax.axvline(
+            x=nearest_x, color="r", linestyle="--", linewidth=1.5
+        )
         cursor_line._cursor_line = True  # Mark as cursor line
 
         # Update cursor text with nearest points
@@ -554,7 +617,12 @@ class DataAnalyzer(QMainWindow):
 
     def on_mouse_drag(self, event):
         """Handles cursor movement when dragging."""
-        if event.inaxes is None or self.df is None or self.cursor_x is None or event.xdata is None:
+        if (
+            event.inaxes is None
+            or self.df is None
+            or self.cursor_x is None
+            or event.xdata is None
+        ):
             return  # Ignore if outside the axes or no cursor initialized
 
         self.cursor_x = event.xdata  # Update X-position of cursor
@@ -570,10 +638,16 @@ class DataAnalyzer(QMainWindow):
             return  # No selected axes
 
         # Get the Y values at the nearest X
-        y_values = {y_col: self.df[y_col].iloc[nearest_index] for y_col in y_cols if y_col in self.df}
+        y_values = {
+            y_col: self.df[y_col].iloc[nearest_index]
+            for y_col in y_cols
+            if y_col in self.df
+        }
 
         # Format text for display
-        text_str = f"X: {nearest_x:.2f}\n" + "\n".join([f"{col}: {y_values[col]:.2f}" for col in y_values])
+        text_str = f"X: {nearest_x:.2f}\n" + "\n".join(
+            [f"{col}: {y_values[col]:.2f}" for col in y_values]
+        )
 
         # Position cursor text at the highest Y value
         y_pos = max(y_values.values()) if y_values else self.ax.get_ylim()[0]
@@ -584,65 +658,92 @@ class DataAnalyzer(QMainWindow):
                 txt.remove()
 
         # Create new cursor text
-        cursor_text = self.ax.text(nearest_x, y_pos, text_str, fontsize=10, color="red",
-                                   bbox=dict(facecolor="white", alpha=0.7))
+        cursor_text = self.ax.text(
+            nearest_x,
+            y_pos,
+            text_str,
+            fontsize=10,
+            color="red",
+            bbox=dict(facecolor="white", alpha=0.7),
+        )
         cursor_text._cursor_text = True  # Mark as cursor text
 
         self.canvas.draw()
 
     def fetch_pump_models(self):
-        """Generate pump models dynamically based on the dataset in Tab1."""
-        if not hasattr(self, 'df') or self.df is None or self.df.empty:
-            self.pump_dropdown.clear()
-            self.pump_dropdown.addItem("Error: No data loaded in Tab1")
-            return
+        self.pump_dropdown.clear()
+        self.pump_dropdown.addItem(
+            "V60N Pump 110cc"
+        )  # Replace with dynamic fetching if needed
 
-        try:
-            # ✅ Extract relevant column names for context
-            columns = ", ".join(self.df.columns[:2]) if len(self.df.columns) > 0 else "sensor data"
 
-            # ✅ Use GPT-2 to generate pump model names
-            pipe = pipeline("text-generation", model="gpt2")
-            prompt = f"Based on the data: {columns}, Types of anomalies"
-            results = pipe(prompt, max_length=20, do_sample=True, temperature=0.7, num_return_sequences=1)
-
-            # ✅ Extract pump names
-            pump_models = results[0]['generated_text'].split(", ")
-            self.pump_dropdown.clear()
-            self.pump_dropdown.addItems(pump_models)
-
-            # ✅ Force UI update
-            self.pump_dropdown.repaint()
-
-        except Exception as e:
-            self.pump_dropdown.clear()
-            self.pump_dropdown.addItem(f"Error fetching models: {e}")
 
     def analyze_pump_model(self):
-        """Compares the selected pump model with the loaded file data (Tab1) to detect anomalies."""
-        if not hasattr(self, 'df') or self.df is None or self.df.empty:
-            self.anomaly_results.setText("Error: No data file loaded in Tab1.")
+        if self.df is None:
+            self.anomaly_results.setText("Error: No data loaded from Tab1.")
             return
 
         selected_pump = self.pump_dropdown.currentText()
-        if selected_pump in ["Waiting for data from Tab1...", "Error: No data loaded in Tab1"]:
-            self.anomaly_results.setText("Error: No valid pump model selected.")
+        if selected_pump == "Fetching pump models...":
+            self.anomaly_results.setText("Error: No pump model selected.")
             return
 
-        # ✅ Simple anomaly detection based on mean thresholds
-        mean_values = self.df.mean()
-        anomaly_report = f"Analyzing pump model: {selected_pump}\n\n"
+        # Load model from Hugging Face
+        model_path = hf_hub_download(repo_id="InlineHydraulik/Test", filename="v60n_lstm_model.pth")
+        scaler_path = hf_hub_download(repo_id="InlineHydraulik/Test", filename="scaler.pkl")
 
-        for col in self.df.columns:
-            if self.df[col].dtype in [np.float64, np.int64]:  # Numeric columns only
-                mean_val = mean_values[col]
-                threshold = mean_val * 1.2  # Example threshold: 20% deviation
-                anomalies = self.df[self.df[col] > threshold]
+        self.model = LSTMPumpModel(input_dim=3, hidden_dim=64, output_dim=2)
+        self.model.load_state_dict(torch.load(model_path))
+        self.model.eval()
 
-                if not anomalies.empty:
-                    anomaly_report += f"⚠️ {col}: {len(anomalies)} anomalies detected (values > {threshold:.2f})\n"
+        self.scaler = load_scaler(scaler_path)
 
-        self.anomaly_results.setText(anomaly_report if anomaly_report.strip() else "No anomalies detected.")
+        # Preprocess Data
+        test_data = self.df.copy()
+        test_data.rename(columns={
+            "Zeit [s]": "Time",
+            "A: flow rs400 [l/min]": "Flow",
+            "B: Druck2 [bar]": "Pressure2",
+            "C: Druck1 [bar]": "Pressure1",
+            "I: drehzahl [U/min]": "Speed"
+        }, inplace=True)
+        test_data_scaled = self.scaler.transform(test_data[["Speed", "Flow", "Pressure1", "Pressure2"]])
+        print(test_data_scaled)
+
+        '''# Predict using the model
+        input_data = torch.tensor(test_data_scaled[:, [ 0,1]], dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            predictions = self.model(input_data).squeeze(0).numpy()
+
+        test_data["Predicted_Pressure1"] = predictions[:, 0]
+        test_data["Predicted_Pressure2"] = predictions[:, 1]
+
+        # Plot graphs
+        self.axs[0].clear()
+        self.axs[0].plot(test_data["Time"], test_data["Pressure1"], label="Actual Pressure1")
+        self.axs[0].plot(test_data["Time"], test_data["Predicted_Pressure1"], label="Predicted Pressure1",
+                         linestyle="--")
+        self.axs[0].legend()
+        self.axs[0].set_title("Actual vs Predicted Pressure1")
+
+        self.axs[1].clear()
+        self.axs[1].plot(test_data["Time"], test_data["Pressure2"], label="Actual Pressure2")
+        self.axs[1].plot(test_data["Time"], test_data["Predicted_Pressure2"], label="Predicted Pressure2",
+                         linestyle="--")
+        self.axs[1].legend()
+        self.axs[1].set_title("Actual vs Predicted Pressure2")
+
+        self.axs[2].clear()
+        error_p1 = abs(test_data["Pressure1"] - test_data["Predicted_Pressure1"])
+        error_p2 = abs(test_data["Pressure2"] - test_data["Predicted_Pressure2"])
+        self.axs[2].plot(test_data["Time"], error_p1, label="Error Pressure1", color='r')
+        self.axs[2].plot(test_data["Time"], error_p2, label="Error Pressure2", color='b')
+        self.axs[2].legend()
+        self.axs[2].set_title("Prediction Errors")
+
+        self.canvas.draw()
+        self.anomaly_results.setText(test_data.head().to_string(index=False))
+'''
 
 def main():
     app = QApplication(sys.argv)
