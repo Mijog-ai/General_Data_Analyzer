@@ -1,7 +1,5 @@
 import sys
 import os
-import time
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -15,11 +13,16 @@ from PyQt5.QtCore import Qt
 from scipy.ndimage import gaussian_filter1d
 
 
+from transformers import pipeline
+
+
 class DataAnalyzer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Data Analyzer")
         self.setGeometry(100, 100, 1200, 800)
+
+        self.summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
 
         # Initialize variables
         self.df = None
@@ -74,37 +77,54 @@ class DataAnalyzer(QMainWindow):
         self.y_list.setSelectionMode(QAbstractItemView.MultiSelection)
         plot_layout.addWidget(self.y_list, 1, 1)
 
+        # Add Export Button
+        self.export_btn = QPushButton("Export Data and Plot")
+        self.export_btn.clicked.connect(self.export_plot_and_data)
+        left_layout.addWidget(self.export_btn)
+
         # Range filters
+        # X-Range
         plot_layout.addWidget(QLabel("X-Range:"), 2, 0)
-        x_range_layout = QHBoxLayout()
+        x_range_layout = QGridLayout()
+
+        self.x_min_label = QLabel("Min:")
+        x_range_layout.addWidget(self.x_min_label, 0, 0)
         self.x_min = QDoubleSpinBox()
         self.x_min.setDecimals(2)
         self.x_min.setRange(-1e6, 1e6)
         self.x_min.setValue(-1e6)
-        self.x_min.setPrefix("Min: ")
-        x_range_layout.addWidget(self.x_min)
+        x_range_layout.addWidget(self.x_min, 0, 1)
+
+        self.x_max_label = QLabel("Max:")
+        x_range_layout.addWidget(self.x_max_label, 0, 2)
         self.x_max = QDoubleSpinBox()
         self.x_max.setDecimals(2)
         self.x_max.setRange(-1e6, 1e6)
         self.x_max.setValue(1e6)
-        self.x_max.setPrefix("Max: ")
-        x_range_layout.addWidget(self.x_max)
+        x_range_layout.addWidget(self.x_max, 0, 3)
+
         plot_layout.addLayout(x_range_layout, 2, 1)
 
+        # Y-Range
         plot_layout.addWidget(QLabel("Y-Range:"), 3, 0)
-        y_range_layout = QHBoxLayout()
+        y_range_layout = QGridLayout()
+
+        self.y_min_label = QLabel("Min:")
+        y_range_layout.addWidget(self.y_min_label, 0, 0)
         self.y_min = QDoubleSpinBox()
         self.y_min.setDecimals(2)
         self.y_min.setRange(-1e6, 1e6)
         self.y_min.setValue(-1e6)
-        self.y_min.setPrefix("Min: ")
-        y_range_layout.addWidget(self.y_min)
+        y_range_layout.addWidget(self.y_min, 0, 1)
+
+        self.y_max_label = QLabel("Max:")
+        y_range_layout.addWidget(self.y_max_label, 0, 2)
         self.y_max = QDoubleSpinBox()
         self.y_max.setDecimals(2)
         self.y_max.setRange(-1e6, 1e6)
         self.y_max.setValue(1e6)
-        self.y_max.setPrefix("Max: ")
-        y_range_layout.addWidget(self.y_max)
+        y_range_layout.addWidget(self.y_max, 0, 3)
+
         plot_layout.addLayout(y_range_layout, 3, 1)
 
         # Add Title Input
@@ -127,6 +147,8 @@ class DataAnalyzer(QMainWindow):
         self.grid_cb = QCheckBox("Show Grid")
         self.grid_cb.setChecked(True)
         options_layout.addWidget(self.grid_cb)
+
+
 
         self.legend_cb = QCheckBox("Show Legend")
         self.legend_cb.setChecked(True)
@@ -162,6 +184,12 @@ class DataAnalyzer(QMainWindow):
         stats_layout.addWidget(self.stats_table)
         stats_group.setLayout(stats_layout)
         left_layout.addWidget(stats_group)
+
+        # AI Data Summary Checkbox
+        self.ai_summary_cb = QCheckBox("Enable AI Insights")
+        self.ai_summary_cb.setChecked(False)
+        stats_layout.addWidget(self.ai_summary_cb)
+
 
         # Plot button
         self.plot_btn = QPushButton("Create Plot")
@@ -202,6 +230,11 @@ class DataAnalyzer(QMainWindow):
                 self.filename = filename
                 self.preprocess_headers()
                 self.update_ui()
+
+                base_name = os.path.basename(filename)
+                self.file_label.setText(f"Loaded File: {base_name}")
+                self.file_label.setStyleSheet("color: black; font-weight: bold;")
+
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to load file: {e}")
 
@@ -210,6 +243,24 @@ class DataAnalyzer(QMainWindow):
             # Simplify column names if they include descriptions
             self.df.columns = [col.split(';')[0].strip() for col in self.df.columns]
 
+    def generate_ai_summary(self, data):
+        """Generate an AI-powered summary based on dataset statistics."""
+        try:
+            stats = data.describe().to_string()  # Convert statistics to text
+
+            # If text is too long, split it into smaller parts
+            max_chunk_size = 500  # BART model has a token limit, keep it safe
+            text_chunks = [stats[i:i + max_chunk_size] for i in range(0, len(stats), max_chunk_size)]
+
+            summaries = []
+            for chunk in text_chunks:
+                summary = self.summarizer(chunk, max_length=100, min_length=30, do_sample=False)
+                summaries.append(summary[0]['summary_text'])
+
+            return "\n".join(summaries)
+
+        except Exception as e:
+            return f"AI summarization error: {e}"
 
     def reset_ranges(self):
         if self.df is not None:
@@ -229,6 +280,66 @@ class DataAnalyzer(QMainWindow):
             QMessageBox.information(self, "Ranges Reset", "Ranges have been reset to the default values.")
         else:
             QMessageBox.warning(self, "No Data", "Please load a file first.")
+
+    def export_plot_and_data(self):
+        if self.df is None:
+            QMessageBox.warning(self, "Error", "Please load a file first.")
+            return
+
+        # Ask the user for a filename and storage location
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save File", "", "CSV Files (*.csv);;All Files (*.*)"
+        )
+
+        if not file_path:  # User canceled
+            return
+
+        # Ensure the file has a .csv extension
+        if not file_path.lower().endswith(".csv"):
+            file_path += ".csv"
+
+        # Extract the directory and base name from user input
+        save_directory = os.path.dirname(file_path)
+        custom_base_name = os.path.splitext(os.path.basename(file_path))[0]
+
+        # Prepare file names
+        csv_filename = os.path.join(save_directory, f"{custom_base_name}_Analyzed_data.csv")
+        plot_filename = os.path.join(save_directory, f"{custom_base_name}_Plot.png")
+
+        # Ensure X and Y axes are selected
+        x_col = self.x_combo.currentText()
+        y_cols = [item.text() for item in self.y_list.selectedItems()]
+
+        if not x_col or not y_cols:
+            QMessageBox.warning(self, "Error", "Please select X and Y axes before exporting.")
+            return
+
+        # Filter the data within the specified range
+        x_min, x_max = self.x_min.value(), self.x_max.value()
+        filtered_df = self.df[(self.df[x_col] >= x_min) & (self.df[x_col] <= x_max)].copy()
+
+        # Create a new DataFrame for exporting
+        export_df = filtered_df[[x_col]].copy()
+
+        for y_col in y_cols:
+            export_df[y_col] = filtered_df[y_col]
+
+            # Apply smoothing if enabled
+            if self.smoothing_combo.currentText() == "Gaussian":
+                smoothed_data = self.apply_smoothing(filtered_df[y_col])
+                export_df[f"{y_col}_smoothed"] = smoothed_data  # Store smoothed values in a new column
+
+        try:
+            # Save the filtered data with proper formatting (semicolon separator for European CSV)
+            export_df.to_csv(csv_filename, index=False, sep=";", decimal=",")
+
+            QMessageBox.information(self, "Success", f"Filtered data saved to:\n{csv_filename}")
+
+            # Save the plot as an image
+            self.figure.savefig(plot_filename)
+            QMessageBox.information(self, "Success", f"Plot saved to:\n{plot_filename}")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"An error occurred while exporting: {e}")
 
     def update_statistics(self, filtered_df):
         if filtered_df is not None and not filtered_df.empty:
@@ -268,6 +379,10 @@ class DataAnalyzer(QMainWindow):
                     self.stats_table.setItem(row, 1, QTableWidgetItem("-"))  # No specific X-axis
                     self.stats_table.setItem(row, 2, QTableWidgetItem(y_col))
                     self.stats_table.setItem(row, 3, QTableWidgetItem(f"{value:.2f}"))
+
+            if self.ai_summary_cb.isChecked():
+                ai_summary = self.generate_ai_summary(filtered_df)
+                self.data_preview.setText(ai_summary)
         else:
             self.stats_table.setRowCount(0)  # Clear the table
             QMessageBox.warning(self, "No Data", "No data available for statistics.")
