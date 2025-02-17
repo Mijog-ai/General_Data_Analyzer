@@ -1,10 +1,13 @@
-import torch
 import pandas as pd
 import numpy as np
+import xgboost as xgb
 
 def predict_new_pump(file_path, model, scaler):
-    # Load test data
-    new_data = pd.read_csv(file_path)
+    # Load test data with safe error handling
+    new_data = pd.read_csv(file_path, sep=';', on_bad_lines="skip")
+
+    # Print detected columns for debugging
+    print("CSV Columns Found:", new_data.columns)
 
     # Rename columns to match training data
     new_data.rename(columns={
@@ -16,46 +19,51 @@ def predict_new_pump(file_path, model, scaler):
     }, inplace=True)
 
     # Ensure all required columns exist before transformation
-    required_features = ["Time", "Speed", "Flow","Pressure1", "Pressure2"]
+    required_features = ["Time", "Speed", "Flow", "Pressure1", "Pressure2"]
     missing_features = [col for col in required_features if col not in new_data.columns]
 
     if missing_features:
         raise ValueError(f"Missing features in test data: {missing_features}")
 
-    # Apply transformation using all features to match training
-    transformed_features = scaler.transform(new_data[["Speed", "Flow" ,"Pressure1", "Pressure2"]])
+    # Convert decimal commas to dots
+    for col in ["Speed", "Flow", "Pressure1", "Pressure2"]:
+        new_data[col] = new_data[col].astype(str).str.replace(",", ".").astype(float)
+
+    # Apply transformation using MinMaxScaler
+    transformed_features = scaler.transform(new_data[["Speed", "Flow", "Pressure1", "Pressure2"]])
 
     # Create a DataFrame from the transformed values
-    new_data_scaled = pd.DataFrame(transformed_features, columns=["Speed", "Flow" ,"Pressure1", "Pressure2"])
+    new_data_scaled = pd.DataFrame(transformed_features, columns=["Speed", "Flow", "Pressure1", "Pressure2"])
 
     # Ensure "Time" is added correctly
     new_data_scaled["Time"] = new_data["Time"]
 
-    # Prepare input for the model (reshape to batch format: batch_size=1, seq_len=500, feature_dim=2)
-    input_data = torch.tensor(new_data_scaled[[ "Speed", "Flow"]].values, dtype=torch.float32).unsqueeze(0)
+    # Convert input data to XGBoost DMatrix format
+    input_data = xgb.DMatrix(new_data_scaled[["Speed", "Flow"]].values)
 
-    # Debugging: Print input shape before passing to the model
-    print(f"Input shape to LSTM: {input_data.shape}")  # Expected: (1, 500, 2)
+    # Get predictions using XGBoost
+    predictions = model.predict(input_data)
 
-    # Get predictions for all time steps
-    with torch.no_grad():
-        predictions = model(input_data)  # Should output shape (1, 500, 2)
+    # Convert predictions to a NumPy array
+    predictions = np.array(predictions)
 
-    # Debugging: Print prediction shape
-    print(f"Raw predictions shape: {predictions.shape}")  # Expected: (1, 500, 2)
+    # Ensure correct shape (2D)
+    if predictions.ndim == 1:
+        predictions = predictions.reshape(-1, 2)
 
-    # Remove batch dimension and reshape
-    predictions = predictions.squeeze(0).numpy()  # Expected shape (500, 2)
+    # **Inverse transform predictions to original scale**
+    # The scaler was fitted on ["Speed", "Flow", "Pressure1", "Pressure2"], so we must create a placeholder array
+    placeholder_array = np.zeros((predictions.shape[0], 2))  # Placeholder for Speed & Flow
+    predictions_full = np.hstack((placeholder_array, predictions))  # Add placeholders
 
-    # Debugging: Print final prediction shape
-    print(f"Final predictions shape: {predictions.shape}")  # Expected: (500, 2)
+    # Apply inverse transform
+    predictions_original_scale = scaler.inverse_transform(predictions_full)[:, 2:]  # Extract Pressure1 & Pressure2
 
-    # Store predictions in DataFrame
-    new_data["Predicted_Pressure1"] = predictions[:, 0]
-    new_data["Predicted_Pressure2"] = predictions[:, 1]
+    # Store correctly scaled predictions in DataFrame
+    new_data["Predicted_Pressure1"] = predictions_original_scale[:, 0]
+    new_data["Predicted_Pressure2"] = predictions_original_scale[:, 1]
 
     return new_data
-
 
 # utils/upload.py
 from huggingface_hub import HfApi

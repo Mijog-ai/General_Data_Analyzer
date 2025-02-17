@@ -7,7 +7,8 @@ def load_and_preprocess_data(file_path):
     import pandas as pd
     from sklearn.preprocessing import MinMaxScaler
 
-    df = pd.read_csv(file_path)
+    # Use sep=";" to correctly read the German CSV format
+    df = pd.read_csv(file_path, sep=";")
 
     # Rename columns to match expected names
     df.rename(columns={
@@ -18,10 +19,16 @@ def load_and_preprocess_data(file_path):
         "I: drehzahl [U/min]": "Speed"
     }, inplace=True)
 
+    # Convert German decimal format (comma to dot)
+    for col in ["Speed", "Flow", "Pressure1", "Pressure2"]:
+        df[col] = df[col].astype(str).str.replace(",", ".").astype(float)
+
+    # Normalize the data using MinMaxScaler
     scaler = MinMaxScaler()
-    df[["Speed", "Flow","Pressure1", "Pressure2"]] = scaler.fit_transform(df[["Speed", "Flow","Pressure1", "Pressure2"]])
+    df[["Speed", "Flow", "Pressure1", "Pressure2"]] = scaler.fit_transform(df[["Speed", "Flow", "Pressure1", "Pressure2"]])
 
     return df, scaler
+
 
 def save_scaler(scaler, path):
     joblib.dump(scaler, path)

@@ -1,6 +1,6 @@
 import sys
 import os
-
+import pickle as pp
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -36,11 +36,8 @@ from scipy.ndimage import gaussian_filter1d
 
 from PyQt5.QtWidgets import QComboBox, QTextEdit, QPushButton, QLabel
 from huggingface_hub import hf_hub_download
-from models.utils.model_LSTM import LSTMPumpModel
-
-from models.utils.data_utils import load_scaler
-import torch
-
+import xgboost as xgb
+import joblib
 
 class DataAnalyzer(QMainWindow):
     def __init__(self):
@@ -56,7 +53,7 @@ class DataAnalyzer(QMainWindow):
         self.cursor_x = None  # Stores X position of cursor
 
         self.df = None  # Loaded data from Tab1
-        self.model = None  # Loaded LSTM model
+        self.model = None  # Loaded Decision Tree model
         self.scaler = None  # Scaler for preprocessing
 
         self.setup_ui()
@@ -689,14 +686,24 @@ class DataAnalyzer(QMainWindow):
             return
 
         # Load model from Hugging Face
-        model_path = hf_hub_download(repo_id="InlineHydraulik/Test", filename="v60n_lstm_model.pth")
-        scaler_path = hf_hub_download(repo_id="InlineHydraulik/Test", filename="scaler.pkl")
+        try:
+            model_path = hf_hub_download(repo_id="InlineHydraulik/Test", filename="v60n_xgboost_model.json")
+            scaler_path = hf_hub_download(repo_id="InlineHydraulik/Test", filename="scaler.pkl")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to download model: {e}")
+            return
 
-        self.model = LSTMPumpModel(input_dim=3, hidden_dim=64, output_dim=2)
-        self.model.load_state_dict(torch.load(model_path))
-        self.model.eval()
+        if not os.path.exists(model_path):
+            QMessageBox.warning(self, "Error", "XGBoost model file not found!")
+            return
 
-        self.scaler = load_scaler(scaler_path)
+        try:
+            self.model = xgb.Booster()
+            self.model.load_model(model_path)  # Load XGBoost model
+            self.scaler = joblib.load(scaler_path)  # Load MinMaxScaler
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load model: {e}")
+            return
 
         # Preprocess Data
         test_data = self.df.copy()
@@ -707,16 +714,52 @@ class DataAnalyzer(QMainWindow):
             "C: Druck1 [bar]": "Pressure1",
             "I: drehzahl [U/min]": "Speed"
         }, inplace=True)
-        test_data_scaled = self.scaler.transform(test_data[["Speed", "Flow", "Pressure1", "Pressure2"]])
-        print(test_data_scaled)
 
-        '''# Predict using the model
-        input_data = torch.tensor(test_data_scaled[:, [ 0,1]], dtype=torch.float32).unsqueeze(0)
-        with torch.no_grad():
-            predictions = self.model(input_data).squeeze(0).numpy()
+        required_columns = ["Speed", "Flow", "Pressure1", "Pressure2", "Time"]
+        missing_columns = [col for col in required_columns if col not in test_data.columns]
+        if missing_columns:
+            QMessageBox.warning(self, "Error", f"Missing required columns: {missing_columns}")
+            return
 
-        test_data["Predicted_Pressure1"] = predictions[:, 0]
-        test_data["Predicted_Pressure2"] = predictions[:, 1]
+        try:
+            # Scale input data using the same scaler from training
+            test_data_scaled = self.scaler.transform(test_data[["Speed", "Flow", "Pressure1", "Pressure2"]])
+            test_data_scaled = np.array(test_data_scaled)  # Ensure it's a NumPy array
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to scale data: {e}")
+            return
+
+        try:
+            # Convert input data to XGBoost DMatrix format
+            input_data = xgb.DMatrix(test_data_scaled[:, [0, 1]])  # Only Speed & Flow are inputs
+
+            # Get predictions using XGBoost
+            predictions = self.model.predict(input_data)
+
+            # Ensure correct shape (2D)
+            predictions = np.array(predictions)
+            if predictions.ndim == 1:
+                predictions = predictions.reshape(-1, 2)
+
+            # **Inverse transform predictions to original scale**
+            placeholder_array = np.zeros((predictions.shape[0], 2))  # Placeholder for Speed & Flow
+            predictions_full = np.hstack((placeholder_array, predictions))  # Add placeholders
+
+            predictions_original_scale = self.scaler.inverse_transform(predictions_full)[:,
+                                         2:]  # Extract Pressure1 & Pressure2
+
+            # Store correctly scaled predictions in DataFrame
+            test_data["Predicted_Pressure1"] = predictions_original_scale[:, 0]
+            test_data["Predicted_Pressure2"] = predictions_original_scale[:, 1]
+
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Prediction failed: {e}")
+            return
+
+        # Ensure "Time" column exists before plotting
+        if "Time" not in test_data:
+            QMessageBox.warning(self, "Error", "Missing 'Time' column in dataset!")
+            return
 
         # Plot graphs
         self.axs[0].clear()
@@ -743,7 +786,7 @@ class DataAnalyzer(QMainWindow):
 
         self.canvas.draw()
         self.anomaly_results.setText(test_data.head().to_string(index=False))
-'''
+
 
 def main():
     app = QApplication(sys.argv)
