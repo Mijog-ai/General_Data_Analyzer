@@ -95,10 +95,10 @@ class DataAnalyzer(QMainWindow):
 
         # Graph Display
         # Graph Display
-        self.figure, self.axs = plt.subplots(3, 1, figsize=(10, 12))  # Three subplots
-        self.canvas = FigureCanvas(self.figure)
-        layout.addWidget(NavigationToolbar(self.canvas, self))
-        layout.addWidget(self.canvas)
+        self.figure_tab2, self.axs_tab2 = plt.subplots(3, 1, figsize=(10, 12))  # Three subplots
+        self.canvas_tab2 = FigureCanvas(self.figure_tab2)
+        layout.addWidget(NavigationToolbar(self.canvas_tab2, self))
+        layout.addWidget(self.canvas_tab2)
 
         self.fetch_pump_models()
 
@@ -269,21 +269,21 @@ class DataAnalyzer(QMainWindow):
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
 
-        self.figure, self.ax = plt.subplots(figsize=(10, 8))
-        self.canvas = FigureCanvas(self.figure)
-        right_layout.addWidget(self.canvas)
+        self.figure_tab1, self.ax_tab1 = plt.subplots(figsize=(10, 8))
+        self.canvas_tab1 = FigureCanvas(self.figure_tab1)
+        right_layout.addWidget(self.canvas_tab1)
 
-        self.toolbar = NavigationToolbar(self.canvas, self)
-        right_layout.addWidget(self.toolbar)
+        self.toolbar_tab1 = NavigationToolbar(self.canvas_tab1, self)
+        right_layout.addWidget(self.toolbar_tab1)
 
         # Initialize vertical cursor (Hidden initially)
-        self.cursor_line = self.ax.axvline(
+        self.cursor_line = self.ax_tab1.axvline(
             x=0, color="r", linestyle="--", linewidth=1.5
         )
         self.cursor_line.set_visible(False)  # Hide initially
 
         # Initialize text for cursor (Hidden initially)
-        self.cursor_text = self.ax.text(
+        self.cursor_text = self.ax_tab1.text(
             0,
             0,
             "",
@@ -293,8 +293,8 @@ class DataAnalyzer(QMainWindow):
         )
         self.cursor_text.set_visible(False)
 
-        self.canvas.mpl_connect("button_press_event", self.on_click)
-        self.canvas.mpl_connect("motion_notify_event", self.on_mouse_drag)
+        self.canvas_tab1.mpl_connect("button_press_event", self.on_click)
+        self.canvas_tab1.mpl_connect("motion_notify_event", self.on_mouse_drag)
 
         h_layout.addWidget(right_panel, stretch=2)
         layout.addLayout(h_layout)
@@ -302,7 +302,7 @@ class DataAnalyzer(QMainWindow):
     def update_plot_title(self):
         """Update the plot title dynamically based on the input."""
         plot_title = self.title_input.text().strip()
-        self.ax.set_title(plot_title)
+        self.ax_tab1.set_title(plot_title)
         self.canvas.draw()
 
     def load_file(self):
@@ -518,7 +518,7 @@ class DataAnalyzer(QMainWindow):
             self.update_statistics(filtered_df)
 
             # Clear the axes for the new plot
-            self.ax.clear()
+            self.ax_tab1.clear()
 
             for y_col in y_cols:
 
@@ -527,7 +527,7 @@ class DataAnalyzer(QMainWindow):
                     self.df[y_col] = pd.to_numeric(self.df[y_col], errors="coerce")
 
                     # Plot original data
-                    self.ax.plot(
+                    self.ax_tab1.plot(
                         filtered_df[x_col],
                         filtered_df[y_col],
                         label=f"{y_col}",
@@ -540,14 +540,14 @@ class DataAnalyzer(QMainWindow):
                     self.df[y_col] = pd.to_numeric(self.df[y_col], errors="coerce")
 
                     # Plot original data
-                    self.ax.plot(
+                    self.ax_tab1.plot(
                         filtered_df[x_col],
                         filtered_df[y_col],
                         label=f"{y_col} (Original)",
                         alpha=0.4,
                     )
                     smoothed_data = self.apply_smoothing(filtered_df[y_col])
-                    self.ax.plot(
+                    self.ax_tab1.plot(
                         filtered_df[x_col],
                         smoothed_data,
                         label=f"{y_col} (Smoothed)",
@@ -556,21 +556,21 @@ class DataAnalyzer(QMainWindow):
 
             # Set plot options
             if self.grid_cb.isChecked():
-                self.ax.grid(True)
+                self.ax_tab1.grid(True)
 
             if self.legend_cb.isChecked():
-                self.ax.legend()
+                self.ax_tab1.legend()
 
-            self.ax.set_xlabel(x_col)
+            self.ax_tab1.set_xlabel(x_col)
 
             # Set custom plot title if provided
             plot_title = self.title_input.text().strip()
             if plot_title:
-                self.ax.set_title(plot_title)
+                self.ax_tab1.set_title(plot_title)
 
-            # Adjust layout and redraw canvas
-            self.figure.tight_layout()
-            self.canvas.draw()
+
+            self.figure_tab1.tight_layout()
+            self.canvas_tab1.draw()
 
         except Exception as e:
             QMessageBox.warning(self, "Error", f"An error occurred: {e}")
@@ -762,29 +762,31 @@ class DataAnalyzer(QMainWindow):
             return
 
         # Plot graphs
-        self.axs[0].clear()
-        self.axs[0].plot(test_data["Time"], test_data["Pressure1"], label="Actual Pressure1")
-        self.axs[0].plot(test_data["Time"], test_data["Predicted_Pressure1"], label="Predicted Pressure1",
+        self.axs_tab2[0].clear()
+        self.axs_tab2[0].plot(test_data["Time"], test_data["Pressure1"], label="Actual Pressure1")
+        self.axs_tab2[0].plot(test_data["Time"], test_data["Predicted_Pressure1"], label="Predicted Pressure1",
                          linestyle="--")
-        self.axs[0].legend()
-        self.axs[0].set_title("Actual vs Predicted Pressure1")
+        self.axs_tab2[0].legend()
+        self.axs_tab2[0].set_title("Actual vs Predicted Pressure1")
 
-        self.axs[1].clear()
-        self.axs[1].plot(test_data["Time"], test_data["Pressure2"], label="Actual Pressure2")
-        self.axs[1].plot(test_data["Time"], test_data["Predicted_Pressure2"], label="Predicted Pressure2",
+        self.axs_tab2[1].clear()
+        self.axs_tab2[1].plot(test_data["Time"], test_data["Pressure2"], label="Actual Pressure2")
+        self.axs_tab2[1].plot(test_data["Time"], test_data["Predicted_Pressure2"], label="Predicted Pressure2",
                          linestyle="--")
-        self.axs[1].legend()
-        self.axs[1].set_title("Actual vs Predicted Pressure2")
+        self.axs_tab2[1].legend()
+        self.axs_tab2[1].set_title("Actual vs Predicted Pressure2")
 
-        self.axs[2].clear()
+        self.axs_tab2[2].clear()
         error_p1 = abs(test_data["Pressure1"] - test_data["Predicted_Pressure1"])
         error_p2 = abs(test_data["Pressure2"] - test_data["Predicted_Pressure2"])
-        self.axs[2].plot(test_data["Time"], error_p1, label="Error Pressure1", color='r')
-        self.axs[2].plot(test_data["Time"], error_p2, label="Error Pressure2", color='b')
-        self.axs[2].legend()
-        self.axs[2].set_title("Prediction Errors")
+        self.axs_tab2[2].plot(test_data["Time"], error_p1, label="Error Pressure1", color='r')
+        self.axs_tab2[2].plot(test_data["Time"], error_p2, label="Error Pressure2", color='b')
+        self.axs_tab2[2].legend()
+        self.axs_tab2[2].set_title("Prediction Errors")
 
-        self.canvas.draw()
+        self.figure_tab2.tight_layout(pad=3.0)  # Increase padding
+        self.figure_tab2.subplots_adjust(hspace=0.5)  # Increase space between plots
+        self.canvas_tab2.draw()
         self.anomaly_results.setText(test_data.head().to_string(index=False))
 
 

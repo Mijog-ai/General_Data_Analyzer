@@ -7,7 +7,7 @@ python_path = sys.executable
 
 # Define PyInstaller arguments
 pyinstaller_args = [
-    'data_analyzer.py',  # Your main script
+    'GDA_ML.py',  # Your main script
     '--name=General_Data_Reader_&_Analyzer',  # Name of the output executable
     '--onefile',  # Create a single executable file
     '--windowed',  # Don't show console window
@@ -19,6 +19,9 @@ pyinstaller_args = [
     '--hidden-import=PyQt5',
     '--hidden-import=matplotlib.backends.backend_qt5agg',
     '--hidden-import=scipy.ndimage',
+    '--hidden-import=joblib',
+    '--hidden-import=huggingface-hub',
+    '--hidden-import=xgboost',
 ]
 
 # Run PyInstaller
