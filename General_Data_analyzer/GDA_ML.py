@@ -789,6 +789,129 @@ class DataAnalyzer(QMainWindow):
         self.canvas_tab2.draw()
         self.anomaly_results.setText(test_data.head().to_string(index=False))
 
+'''
+
+
+    def analyze_pump_model(self):
+        if self.df is None:
+            self.anomaly_results.setText("Error: No data loaded from Tab1.")
+            return
+    
+        selected_pump = self.pump_dropdown.currentText()
+        if selected_pump == "Fetching pump models...":
+            self.anomaly_results.setText("Error: No pump model selected.")
+            return
+    
+        # Load model and scaler from Hugging Face
+        try:
+            model_path = hf_hub_download(repo_id="InlineHydraulik/Test", filename="v60n_active_learning_model.pkl")
+            scaler_path = hf_hub_download(repo_id="InlineHydraulik/Test", filename="scaler.pkl")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to download model: {e}")
+            return
+    
+        if not os.path.exists(model_path):
+            QMessageBox.warning(self, "Error", "Active learning model file not found!")
+            return
+    
+        try:
+            self.model = joblib.load(model_path)  # Load RandomForest model
+            self.scaler = joblib.load(scaler_path)  # Load MinMaxScaler
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load model: {e}")
+            return
+    
+        # Preprocess Data
+        test_data = self.df.copy()
+        test_data.rename(columns={
+            "Zeit [s]": "Time",
+            "A: flow rs400 [l/min]": "Flow",
+            "B: Druck2 [bar]": "Pressure2",
+            "C: Druck1 [bar]": "Pressure1",
+            "I: drehzahl [U/min]": "Speed"
+        }, inplace=True)
+    
+        required_columns = ["Speed", "Flow", "Pressure1", "Pressure2", "Time"]
+        missing_columns = [col for col in required_columns if col not in test_data.columns]
+        if missing_columns:
+            QMessageBox.warning(self, "Error", f"Missing required columns: {missing_columns}")
+            return
+    
+        try:
+            # Add placeholders for Pressure1 & Pressure2 to match training scaler
+            test_data["Pressure1"] = 0
+            test_data["Pressure2"] = 0
+    
+            # Scale input data using the MinMaxScaler from training
+            test_data_scaled = self.scaler.transform(test_data[["Speed", "Flow", "Pressure1", "Pressure2"]])
+            test_data_scaled = np.array(test_data_scaled)  # Ensure it's a NumPy array
+    
+            # Extract only Speed & Flow for prediction
+            input_features = test_data_scaled[:, [0, 1]]
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to scale data: {e}")
+            return
+    
+        try:
+            # Get predictions using RandomForest
+            predictions = self.model.predict(input_features)
+    
+            # Ensure correct shape (2D)
+            predictions = np.array(predictions)
+            if predictions.ndim == 1:
+                predictions = predictions.reshape(-1, 2)
+    
+            # **Inverse transform predictions to original scale**
+            placeholder_array = np.zeros((predictions.shape[0], 2))  # Placeholder for Speed & Flow
+            predictions_full = np.hstack((placeholder_array, predictions))  # Add placeholders
+    
+            predictions_original_scale = self.scaler.inverse_transform(predictions_full)[:, 2:]  # Extract Pressure1 & Pressure2
+    
+            # Store correctly scaled predictions in DataFrame
+            test_data["Predicted_Pressure1"] = predictions_original_scale[:, 0]
+            test_data["Predicted_Pressure2"] = predictions_original_scale[:, 1]
+    
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Prediction failed: {e}")
+            return
+    
+        # Ensure "Time" column exists before plotting
+        if "Time" not in test_data:
+            QMessageBox.warning(self, "Error", "Missing 'Time' column in dataset!")
+            return
+    
+        # Plot graphs
+        self.axs_tab2[0].clear()
+        self.axs_tab2[0].plot(test_data["Time"], test_data["Pressure1"], label="Actual Pressure1")
+        self.axs_tab2[0].plot(test_data["Time"], test_data["Predicted_Pressure1"], label="Predicted Pressure1",
+                               linestyle="--")
+        self.axs_tab2[0].legend()
+        self.axs_tab2[0].set_title("Actual vs Predicted Pressure1")
+    
+        self.axs_tab2[1].clear()
+        self.axs_tab2[1].plot(test_data["Time"], test_data["Pressure2"], label="Actual Pressure2")
+        self.axs_tab2[1].plot(test_data["Time"], test_data["Predicted_Pressure2"], label="Predicted Pressure2",
+                               linestyle="--")
+        self.axs_tab2[1].legend()
+        self.axs_tab2[1].set_title("Actual vs Predicted Pressure2")
+    
+        self.axs_tab2[2].clear()
+        error_p1 = abs(test_data["Pressure1"] - test_data["Predicted_Pressure1"])
+        error_p2 = abs(test_data["Pressure2"] - test_data["Predicted_Pressure2"])
+        self.axs_tab2[2].plot(test_data["Time"], error_p1, label="Error Pressure1", color='r')
+        self.axs_tab2[2].plot(test_data["Time"], error_p2, label="Error Pressure2", color='b')
+        self.axs_tab2[2].legend()
+        self.axs_tab2[2].set_title("Prediction Errors")
+    
+        self.figure_tab2.tight_layout(pad=3.0)  # Increase padding
+        self.figure_tab2.subplots_adjust(hspace=0.5)  # Increase space between plots
+        self.canvas_tab2.draw()
+        self.anomaly_results.setText(test_data.head().to_string(index=False))
+
+    
+'''
+
+
 
 def main():
     app = QApplication(sys.argv)

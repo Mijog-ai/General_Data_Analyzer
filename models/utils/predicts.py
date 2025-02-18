@@ -1,3 +1,4 @@
+'''
 import pandas as pd
 import numpy as np
 import xgboost as xgb
@@ -72,3 +73,54 @@ def upload_to_huggingface(file_path, repo_id, filename):
     api = HfApi()
     api.upload_file(path_or_fileobj=file_path, path_in_repo=filename, repo_id=repo_id)
     print(f"Uploaded {filename} to {repo_id}")
+'''
+import pandas as pd
+import numpy as np
+import joblib
+
+def predict_new_pump(file_path, model, scaler):
+    new_data = pd.read_csv(file_path, sep=';', on_bad_lines="skip")
+
+    # Rename columns
+    new_data.rename(columns={
+        "Zeit [s]": "Time",
+        "A: flow rs400 [l/min]": "Flow",
+        "B: Druck2 [bar]": "Pressure2",
+        "C: Druck1 [bar]": "Pressure1",
+        "I: drehzahl [U/min]": "Speed"
+    }, inplace=True)
+
+    required_features = ["Speed", "Flow"]
+    if any(col not in new_data.columns for col in required_features):
+        raise ValueError(f"Missing required features: {required_features}")
+
+    # Convert comma-decimals
+    for col in ["Speed", "Flow"]:
+        new_data[col] = new_data[col].astype(str).str.replace(",", ".").astype(float)
+
+    # Normalize data
+    # Ensure all required columns exist for transformation
+    new_data["Pressure1"] = 0  # Placeholder
+    new_data["Pressure2"] = 0  # Placeholder
+
+    # Apply transformation using the scaler fitted on ["Speed", "Flow", "Pressure1", "Pressure2"]
+    transformed_features = scaler.transform(new_data[["Speed", "Flow", "Pressure1", "Pressure2"]])
+
+    # Remove placeholders after transformation
+    transformed_features = transformed_features[:, :2]  # Keep only Speed & Flow
+
+    new_data_scaled = pd.DataFrame(transformed_features, columns=["Speed", "Flow"])
+
+    # Predict using RandomForest
+    predictions = model.predict(new_data_scaled)
+
+    # Convert to original scale
+    placeholder_array = np.zeros((predictions.shape[0], 2))  # Placeholder
+    predictions_full = np.hstack((placeholder_array, predictions))
+    predictions_original_scale = scaler.inverse_transform(predictions_full)[:, 2:]
+
+    # Store predictions in DataFrame
+    new_data["Predicted_Pressure1"] = predictions_original_scale[:, 0]
+    new_data["Predicted_Pressure2"] = predictions_original_scale[:, 1]
+
+    return new_data

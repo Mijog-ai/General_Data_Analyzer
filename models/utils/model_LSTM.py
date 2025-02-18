@@ -1,3 +1,4 @@
+'''
 import xgboost as xgb
 import joblib
 import pandas as pd
@@ -32,7 +33,7 @@ def train_model(df, max_depth=10, n_estimators=250, learning_rate=0.2):
     params = {
         "objective": "reg:squarederror",  # Regression task
         "max_depth": max_depth,
-        "learning_rate": learning_rate,
+        # "learning_rate": learning_rate,
         "n_estimators": n_estimators,
         "eval_metric": "rmse"  # Root Mean Squared Error
     }
@@ -62,3 +63,84 @@ def load_model(path):
     model = xgb.Booster()
     model.load_model(path)
     return model
+'''
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from scipy.stats import qmc  # For Latin Hypercube Sampling (LHS)
+
+
+def lhs_sampling(data, n_samples):
+    """
+    Perform Latin Hypercube Sampling (LHS) on the dataset.
+
+    Parameters:
+        data (pd.DataFrame): The full dataset.
+        n_samples (int): Number of samples to select.
+
+    Returns:
+        pd.DataFrame: Sampled dataset.
+    """
+    sampler = qmc.LatinHypercube(d=len(data.columns))
+
+    # Generate LHS samples and scale them to the row indices range
+    sample_indices = qmc.scale(sampler.random(n=n_samples), 0, len(data) - 1)
+
+    # Convert to integers for indexing
+    sample_indices = np.floor(sample_indices[:, 0]).astype(int)  # Select first column, since indices are 1D
+
+    return data.iloc[sample_indices]
+
+
+def train_active_learning_model(df, n_samples=50, n_estimators=100, max_depth=5):
+    """
+    Train a RandomForest model using Active Learning and LHS.
+
+    Parameters:
+        df (pd.DataFrame): The input data.
+        n_samples (int): Number of initial LHS samples.
+        n_estimators (int): Number of trees in the forest.
+        max_depth (int): The maximum depth of the trees.
+
+    Returns:
+        RandomForestRegressor: Trained model.
+    """
+    # Feature and target selection
+    X = df[["Speed", "Flow"]].values
+    y = df[["Pressure1", "Pressure2"]].values
+
+    # Perform LHS for selecting initial training samples
+    sampled_df = lhs_sampling(df, n_samples)
+
+    X_sampled = sampled_df[["Speed", "Flow"]].values
+    y_sampled = sampled_df[["Pressure1", "Pressure2"]].values
+
+    # Split the sampled data
+    X_train, X_test, y_train, y_test = train_test_split(X_sampled, y_sampled, test_size=0.2, random_state=42)
+
+    # Train a RandomForestRegressor
+    model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth, random_state=42)
+    model.fit(X_train, y_train)
+
+    # Evaluate the model
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    print(f"Mean Squared Error: {mse}")
+
+    return model
+
+def save_model(model, path):
+    """
+    Save the trained model.
+    """
+    import joblib
+    joblib.dump(model, path)
+
+def load_model(path):
+    """
+    Load the saved model.
+    """
+    import joblib
+    return joblib.load(path)
